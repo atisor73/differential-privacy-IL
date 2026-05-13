@@ -1,7 +1,6 @@
 export const LEVELS = [
   { id: 'county', label: 'Counties' },
-  { id: 'tract', label: 'Tracts' },
-  { id: 'block', label: 'Sampled blocks' }
+  { id: 'tract', label: 'Tracts' }
 ];
 
 export const CHANGE_MODES = [
@@ -43,8 +42,7 @@ export function populationChange(record, epsilonIndex, mode = 'absolute') {
 export function countLabel(level, count) {
   const nouns = {
     county: 'counties',
-    tract: 'tracts',
-    block: 'sampled blocks'
+    tract: 'tracts'
   };
   return `${count.toLocaleString()} ${nouns[level] ?? 'units'}`;
 }

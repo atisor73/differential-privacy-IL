@@ -20,8 +20,8 @@
   const margin = { top: 14, right: 14, bottom: 40, left: 50 };
   let plotted = [];
   let xScale = scaleLinear();
-  let yExtent = [0, 0];
-  let yAbs = 1;
+  let yMin = -1;
+  let yMax = 1;
   let yScale = scaleLinear();
   let bins = [];
   let trendLine = null;
@@ -34,9 +34,21 @@
 
   $: xScale = scaleLinear().domain([0, 1]).range([margin.left, width - margin.right]);
 
-  $: yExtent = extent(plotted, (point) => point.y);
-  $: yAbs = max([Math.abs(yExtent[0] ?? 0), Math.abs(yExtent[1] ?? 0), 1]);
-  $: yScale = scaleLinear().domain([-yAbs, yAbs]).range([height - margin.bottom, margin.top]).nice();
+  $: {
+    const values = plotted.map((point) => point.y).filter((value) => Number.isFinite(value));
+    const domainMin = values.length ? Math.min(...values, 0) : (changeMode === 'percent' ? -0.01 : -1);
+    const domainMax = values.length ? Math.max(...values, 0) : (changeMode === 'percent' ? 0.01 : 1);
+    if (changeMode === 'percent') {
+      const maxAbs = Math.max(Math.abs(domainMin), Math.abs(domainMax), 0.01);
+      yMin = -maxAbs;
+      yMax = maxAbs;
+    } else {
+      const maxAbs = Math.max(Math.abs(domainMin), Math.abs(domainMax), 1);
+      yMin = -maxAbs;
+      yMax = maxAbs;
+    }
+  }
+  $: yScale = scaleLinear().domain([yMin, yMax]).range([height - margin.bottom, margin.top]).nice();
 
   $: bins = buildBins(plotted, 12);
   $: trendLine = line()
@@ -95,7 +107,41 @@
   }
 
   function yTicks() {
-    return yScale.ticks(5);
+    if (changeMode === 'percent') {
+      return yScale.ticks(7);
+    }
+
+    const preferred = [-500, -150, -100, -10, -5, -1, 0, 1, 5, 10, 100, 150, 500];
+    const [domainMin, domainMax] = yScale.domain();
+    const visible = preferred.filter((tick) => tick >= domainMin && tick <= domainMax);
+    if (!visible.includes(0)) {
+      visible.push(0);
+    }
+    return visible.sort((left, right) => left - right);
+  }
+
+  function formatYAxisTick(value) {
+    if (changeMode === 'percent') {
+      return `${(value * 100).toFixed(1)}%`;
+    }
+
+    const absValue = Math.abs(value);
+    if (absValue >= 1000) {
+      return Math.round(value).toLocaleString();
+    }
+    if (absValue >= 100) {
+      return `${Math.round(value)}`;
+    }
+    if (absValue >= 10) {
+      return value.toFixed(0);
+    }
+    if (absValue >= 1) {
+      return value.toFixed(1).replace(/\.0$/, '');
+    }
+    if (absValue === 0) {
+      return '0';
+    }
+    return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
   }
 </script>
 
@@ -133,7 +179,7 @@
         class="grid"
       />
       <text x={margin.left - 10} y={yScale(tick) + 4} text-anchor="end" class="axis-label">
-        {changeMode === 'percent' ? `${(tick * 100).toFixed(1)}%` : Math.round(tick)}
+        {formatYAxisTick(tick)}
       </text>
     {/each}
 

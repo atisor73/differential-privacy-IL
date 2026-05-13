@@ -391,6 +391,30 @@ def load_sampled_block_metrics(sampled_blocks, dp_root: Path, epsilons: list[str
     return list(sample_lookup.values())
 
 
+def load_block_truth_records(dp_root: Path, epsilons: list[str]):
+    records = []
+    path = dp_root / f"epsilon_{epsilons[0]}" / "DF_IL_2010_BLOCK_DP.csv"
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            geoid = row["geoid"]
+            if not geoid or len(geoid) != 15 or not geoid.startswith("17"):
+                continue
+            records.append(
+                {
+                    "geoid": geoid,
+                    "tractGeoid": row["parent_geoid"],
+                    "countyGeoid": geoid[:5],
+                    "truePop": int(row["true_pop"]),
+                    "white": int(row["white"]),
+                    "black": int(row["black"]),
+                    "asian": int(row["asian"]),
+                    "other": int(row["other"]),
+                }
+            )
+    return records
+
+
 def assign_demo_vtds(sampled_blocks, county_bbox_lookup, epsilon_count: int):
     vtd_summary = {}
 
@@ -456,6 +480,7 @@ def main():
     sampled_blocks = sample_blocks(quotas)
     sampled_blocks = load_sampled_block_metrics(sampled_blocks, dp_root, epsilons)
     sampled_blocks = sorted(sampled_blocks, key=lambda item: (item["countyGeoid"], item["tractGeoid"], item["geoid"]))
+    block_truth_records = load_block_truth_records(dp_root, epsilons)
     demo_vtds = assign_demo_vtds(sampled_blocks, county_bbox_lookup, len(epsilons))
     block_features = []
     block_metrics = []
@@ -494,10 +519,12 @@ def main():
     (PUBLIC_DATA_DIR / "blocks_sample.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": block_features}, separators=(",", ":"))
     )
+    (PUBLIC_DATA_DIR / "block_truth.json").write_text(json.dumps(block_truth_records, separators=(",", ":")))
 
     summary = {
         "counties": len(counties),
         "tracts": len(tracts),
+        "blockTruth": len(block_truth_records),
         "sampledBlocks": len(block_metrics),
         "demoVtds": len(demo_vtds),
     }

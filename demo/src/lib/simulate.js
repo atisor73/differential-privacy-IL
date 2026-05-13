@@ -75,29 +75,31 @@ function allocateCounts(total, counts) {
   return base;
 }
 
-export function simulateRecordRelease(record, epsilon, seedParts = []) {
+function computeSimulatedRelease(record, epsilon, seedParts = []) {
   const noisy = {};
+  const adjusted = {};
   for (const field of RACE_FIELDS) {
-    const value = noisyCount(record[field], epsilon, [...seedParts, record.geoid, field]);
+    const value = signedNoisyCount(record[field], epsilon, [...seedParts, record.geoid, field]);
     noisy[field] = value;
+    adjusted[field] = Math.max(0, value);
   }
-  const simulatedPopForChange = signedNoisyCount(
-    record.truePop,
-    epsilon,
-    [...seedParts, record.geoid, 'true_pop']
-  );
-  const simulatedPop = Math.max(0, simulatedPopForChange);
-  const allocated = allocateCounts(simulatedPop, noisy);
+  const simulatedPop = RACE_FIELDS.reduce((sum, field) => sum + adjusted[field], 0);
+  return {
+    simulatedWhite: adjusted.white,
+    simulatedBlack: adjusted.black,
+    simulatedAsian: adjusted.asian,
+    simulatedOther: adjusted.other,
+    simulatedPop,
+    simulatedPopForChange: simulatedPop,
+    simulatedWhiteShare: simulatedPop ? adjusted.white / simulatedPop : 0,
+    simulatedChange: simulatedPop - record.truePop
+  };
+}
+
+export function simulateRecordRelease(record, epsilon, seedParts = []) {
   return {
     ...record,
-    simulatedWhite: allocated.white,
-    simulatedBlack: allocated.black,
-    simulatedAsian: allocated.asian,
-    simulatedOther: allocated.other,
-    simulatedPop,
-    simulatedPopForChange,
-    simulatedWhiteShare: simulatedPop ? allocated.white / simulatedPop : 0,
-    simulatedChange: simulatedPopForChange - record.truePop
+    ...computeSimulatedRelease(record, epsilon, seedParts)
   };
 }
 
@@ -112,7 +114,7 @@ export function simulateRatio(numerator, denominator, epsilon, seedParts = []) {
 
 export function materializeReleaseSet(records, epsilon, seedParts = []) {
   return records.map((record) => {
-    const simulated = simulateRecordRelease(record, epsilon, seedParts);
+    const simulated = computeSimulatedRelease(record, epsilon, seedParts);
     return {
       ...record,
       adjWhite: [simulated.simulatedWhite],
@@ -123,4 +125,67 @@ export function materializeReleaseSet(records, epsilon, seedParts = []) {
       releasedPopForChange: [simulated.simulatedPopForChange]
     };
   });
+}
+
+function upsertAggregate(target, geoid, parentGeoid) {
+  let record = target.get(geoid);
+  if (!record) {
+    record = {
+      geoid,
+      parentGeoid,
+      truePop: 0,
+      white: 0,
+      black: 0,
+      asian: 0,
+      other: 0,
+      adjWhite: [0],
+      adjBlack: [0],
+      adjAsian: [0],
+      adjOther: [0],
+      adjPop: [0],
+      releasedPopForChange: [0]
+    };
+    target.set(geoid, record);
+  }
+  return record;
+}
+
+export function aggregateBlockLevelReleases(blockTruthRecords, epsilon, seedParts = []) {
+  const tractMap = new Map();
+  const countyMap = new Map();
+
+  for (const block of blockTruthRecords) {
+    const simulated = computeSimulatedRelease(block, epsilon, seedParts);
+
+    const tractRecord = upsertAggregate(tractMap, block.tractGeoid, block.countyGeoid);
+    tractRecord.truePop += block.truePop;
+    tractRecord.white += block.white;
+    tractRecord.black += block.black;
+    tractRecord.asian += block.asian;
+    tractRecord.other += block.other;
+    tractRecord.adjWhite[0] += simulated.simulatedWhite;
+    tractRecord.adjBlack[0] += simulated.simulatedBlack;
+    tractRecord.adjAsian[0] += simulated.simulatedAsian;
+    tractRecord.adjOther[0] += simulated.simulatedOther;
+    tractRecord.adjPop[0] += simulated.simulatedPop;
+    tractRecord.releasedPopForChange[0] += simulated.simulatedPopForChange;
+
+    const countyRecord = upsertAggregate(countyMap, block.countyGeoid, '17');
+    countyRecord.truePop += block.truePop;
+    countyRecord.white += block.white;
+    countyRecord.black += block.black;
+    countyRecord.asian += block.asian;
+    countyRecord.other += block.other;
+    countyRecord.adjWhite[0] += simulated.simulatedWhite;
+    countyRecord.adjBlack[0] += simulated.simulatedBlack;
+    countyRecord.adjAsian[0] += simulated.simulatedAsian;
+    countyRecord.adjOther[0] += simulated.simulatedOther;
+    countyRecord.adjPop[0] += simulated.simulatedPop;
+    countyRecord.releasedPopForChange[0] += simulated.simulatedPopForChange;
+  }
+
+  return {
+    tracts: Array.from(tractMap.values()).sort((left, right) => left.geoid.localeCompare(right.geoid)),
+    counties: Array.from(countyMap.values()).sort((left, right) => left.geoid.localeCompare(right.geoid))
+  };
 }

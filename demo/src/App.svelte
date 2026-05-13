@@ -1,61 +1,55 @@
 <script>
   import { onMount } from 'svelte';
-  import CompositionTiles from './lib/CompositionTiles.svelte';
   import DetailPanel from './lib/DetailPanel.svelte';
   import IllinoisMap from './lib/IllinoisMap.svelte';
   import ReadingNotesPanel from './lib/ReadingNotesPanel.svelte';
   import ScopeSummaryPanel from './lib/ScopeSummaryPanel.svelte';
-  import RepeatedReleasePanel from './lib/RepeatedReleasePanel.svelte';
   import ScatterPlot from './lib/ScatterPlot.svelte';
-  import { CHANGE_MODES, LEVELS, summarize } from './lib/metrics.js';
-  const TABS = [
-    { id: 'bias', label: 'Spatial bias' },
-    { id: 'releases', label: 'Repeated releases' },
-    { id: 'tiles', label: 'Composition tiles' }
-  ];
+  import { LEVELS, summarize } from './lib/metrics.js';
+  import { aggregateBlockLevelReleases } from './lib/simulate.js';
 
   let countiesGeojson = null;
   let tractsGeojson = null;
-  let blocksSampleGeojson = null;
   let metrics = null;
+  let blockTruthRecords = [];
   let epsilonOptions = ['0.1', '0.2', '0.5', '1', '2'];
 
-  let activeTab = 'bias';
   let level = 'county';
   let epsilonSlider = 0;
   let epsilonIndex = 0;
   let epsilonValue = 0.5;
   let epsilonLabel = '0.5';
   let changeMode = 'absolute';
-  let overlayVtd = true;
   let inspectedRecord = null;
   let countyRecords = [];
   let tractRecords = [];
-  let blockSample = [];
   let allTractRecords = [];
-  let allBlockRecords = [];
+  let simulatedCountyRecords = [];
+  let simulatedAllTractRecords = [];
   let visibleRecords = [];
   let summary = null;
   let scopeLabel = '';
+  const aggregateReleaseCache = new Map();
 
   const notes = [
     'The map and scatterplot show released aggregates changing while the underlying population stays fixed.',
-    'Synthetic demo VTDs are spatial partitions of sampled blocks, not official election units.',
-    'At the block level, the map uses sampled block polygons only and switches to click-to-inspect so the statewide view stays responsive.'
+    'The JavaScript demo adds independent Laplace-style noise to race counts at the block level, clips at zero, and aggregates upward.',
+    'Because the released totals come from many noised block-level race cells, tract and county counts can end up above or below the true values.',
+    'This is a lightweight visualization model, not the full Census production system.'
   ];
 
   onMount(async () => {
-    const [countiesRes, tractsRes, blocksRes, metricsRes] = await Promise.all([
+    const [countiesRes, tractsRes, metricsRes, blockTruthRes] = await Promise.all([
       fetch('/data/counties.geojson'),
       fetch('/data/tracts.geojson'),
-      fetch('/data/blocks_sample.geojson'),
-      fetch('/data/metrics.json')
+      fetch('/data/metrics.json'),
+      fetch('/data/block_truth.json')
     ]);
 
     countiesGeojson = await countiesRes.json();
     tractsGeojson = await tractsRes.json();
-    blocksSampleGeojson = await blocksRes.json();
     metrics = await metricsRes.json();
+    blockTruthRecords = await blockTruthRes.json();
 
     level = metrics.meta.defaultLevel;
     epsilonOptions = metrics.meta.epsilons ?? epsilonOptions;
@@ -66,32 +60,41 @@
 
   $: countyRecords = metrics?.counties ?? [];
   $: tractRecords = metrics?.tracts ?? [];
-  $: blockSample = metrics?.blockSample ?? [];
   $: epsilonIndex = Math.max(0, Math.min(epsilonOptions.length - 1, Number(epsilonSlider) || 0));
   $: epsilonValue = Number(epsilonOptions[epsilonIndex] ?? 0.5);
   $: epsilonLabel = String(epsilonOptions[epsilonIndex] ?? '0.5');
 
   $: allTractRecords = tractRecords;
-  $: allBlockRecords = blockSample;
+  $: if (blockTruthRecords.length) {
+    const cacheKey = `${epsilonLabel}`;
+    if (!aggregateReleaseCache.has(cacheKey)) {
+      aggregateReleaseCache.set(
+        cacheKey,
+        aggregateBlockLevelReleases(blockTruthRecords, epsilonValue, ['bias', 'block-truth'])
+      );
+    }
+    const aggregated = aggregateReleaseCache.get(cacheKey);
+    simulatedCountyRecords = aggregated.counties;
+    simulatedAllTractRecords = aggregated.tracts;
+  } else {
+    simulatedCountyRecords = [];
+    simulatedAllTractRecords = [];
+  }
 
   $: visibleRecords =
     level === 'county'
-      ? countyRecords
-      : level === 'tract'
-        ? allTractRecords
-        : allBlockRecords;
+      ? simulatedCountyRecords
+      : simulatedAllTractRecords;
 
-  $: summary = summarize(visibleRecords, epsilonIndex, changeMode);
+  $: summary = summarize(visibleRecords, 0, changeMode);
   $: scopeLabel =
     level === 'county'
       ? 'Statewide county view'
-      : level === 'tract'
-        ? 'Statewide tract view'
-        : 'Statewide sampled blocks';
+      : 'Statewide tract view';
 
   function handleSelectCounty(event) {
     if (level === 'county') {
-      inspectedRecord = countyRecords.find((record) => record.geoid === event.detail) ?? null;
+      inspectedRecord = simulatedCountyRecords.find((record) => record.geoid === event.detail) ?? null;
     }
   }
 
@@ -100,27 +103,15 @@
   }
 
   function helperText() {
-    if (activeTab === 'bias') {
-      if (level === 'county') {
-        return 'County and tract levels use precomputed OpenDP releases loaded from the local Illinois DP pipeline outputs.';
-      }
-      if (level === 'tract') {
-        return 'The tract map and scatterplot show all Illinois tracts at once using precomputed OpenDP-adjusted releases aggregated upward from blocks.';
-      }
-      return 'Block mode uses a deterministic statewide sample of Illinois block polygons with precomputed OpenDP-adjusted releases from the Python pipeline.';
+    if (level === 'county') {
+      return 'County values come from noising race counts at the Illinois block level in JavaScript and aggregating those signed block-level errors upward.';
     }
-    if (activeTab === 'releases') {
-      return 'These repeated frames are still simulated in-browser; the spatial bias and composition views use the precomputed OpenDP releases.';
-    }
-    if (activeTab === 'tiles') {
-      return 'The tiles compare the true composition to the selected precomputed OpenDP release, so any race share can move up or down from tile to tile.';
-    }
-    return '';
+    return 'Tract values come from the same block-level JavaScript noise model aggregated upward from blocks, so they can move above or below truth.';
   }
 
 </script>
 
-{#if !metrics || !countiesGeojson || !tractsGeojson || !blocksSampleGeojson}
+{#if !metrics || !countiesGeojson || !tractsGeojson}
   <main class="loading-shell">
     <section class="hero">
       <p class="eyebrow">Preparing the view</p>
@@ -132,22 +123,13 @@
   <main class="shell">
     <section class="hero">
       <div>
-        <p class="eyebrow">Differential privacy, visualized</p>
-        <h1>How Illinois counts wobble when the release changes</h1>
+        <p class="eyebrow">Rosita Fu & Alyssa Nguyen - DATA 35900 - Spring 2026</p>
+        <h1>Visualizing differential privacy in Illinois at various ε</h1>
         <p class="lede">
           This demo keeps the underlying population fixed and lets the published counts change with the privacy
-          level. The tabs below explore different metaphors: spatial bias, repeated releases, and composition-change
-          tiles.
+          level through a simple block-level noise model.
         </p>
       </div>
-    </section>
-
-    <section class="tabs">
-      {#each TABS as tab}
-        <button type="button" class:active={activeTab === tab.id} on:click={() => (activeTab = tab.id)}>
-          {tab.label}
-        </button>
-      {/each}
     </section>
 
     <section class="controls">
@@ -188,80 +170,66 @@
         </div>
       </div>
 
-      {#if activeTab === 'bias'}
-        <div class="control-group">
-          <span class="control-label">Y-axis</span>
-          <div class="segmented">
-            {#each CHANGE_MODES as option}
-              <button type="button" class:active={changeMode === option.id} on:click={() => (changeMode = option.id)}>
-                {option.label}
-              </button>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      {#if activeTab === 'bias'}
-        <label class="toggle">
-          <input type="checkbox" bind:checked={overlayVtd} disabled={level !== 'block'} />
-          <span>Show demo VTD overlay</span>
+      <div class="control-group mode-group">
+        <span class="control-label">Metric</span>
+        <label class="mode-check">
+          <input
+            type="checkbox"
+            checked={changeMode === 'absolute'}
+            on:change={() => (changeMode = 'absolute')}
+          />
+          <span>Population change</span>
         </label>
-      {/if}
+        <label class="mode-check">
+          <input
+            type="checkbox"
+            checked={changeMode === 'percent'}
+            on:change={() => (changeMode = 'percent')}
+          />
+          <span>Percent change</span>
+        </label>
+      </div>
     </section>
 
     {#if helperText()}
       <p class="helper">{helperText()}</p>
     {/if}
 
-    {#if activeTab === 'bias'}
-      <section class="content">
-        <div class="map-column">
-          <IllinoisMap
-            {countiesGeojson}
-            {tractsGeojson}
-            blocksGeojson={blocksSampleGeojson}
-            countyRecords={countyRecords}
-            tractRecords={allTractRecords}
-            blockRecords={allBlockRecords}
-            {epsilonIndex}
-            {level}
-            {changeMode}
-            {overlayVtd}
-            on:selectCounty={handleSelectCounty}
-            on:inspect={handleInspect}
-          />
-          <DetailPanel
-            selectedRecord={inspectedRecord}
-            {epsilonIndex}
-            {changeMode}
-            {level}
-          />
-        </div>
+    <section class="content">
+      <div class="map-column">
+        <IllinoisMap
+          {countiesGeojson}
+          {tractsGeojson}
+          countyRecords={simulatedCountyRecords}
+          tractRecords={simulatedAllTractRecords}
+          epsilonIndex={0}
+          {level}
+          {changeMode}
+          on:selectCounty={handleSelectCounty}
+          on:inspect={handleInspect}
+        />
+        <DetailPanel
+          selectedRecord={inspectedRecord}
+          epsilonIndex={0}
+          {changeMode}
+          {level}
+        />
+      </div>
 
-        <div class="side-column">
-          <ScopeSummaryPanel {epsilonLabel} {changeMode} {scopeLabel} {summary} />
+      <div class="side-column">
+        <ScopeSummaryPanel {epsilonLabel} {changeMode} {scopeLabel} {summary} />
 
-          <ScatterPlot
-            records={visibleRecords}
-            {epsilonIndex}
-            {changeMode}
-            {level}
-            on:inspect={handleInspect}
-          />
+        <ScatterPlot
+          records={visibleRecords}
+          epsilonIndex={0}
+          {changeMode}
+          {level}
+          on:inspect={handleInspect}
+        />
 
-          <ReadingNotesPanel {notes} />
-        </div>
-      </section>
-    {:else if activeTab === 'releases'}
-      <RepeatedReleasePanel
-        records={level === 'county' ? countyRecords : level === 'tract' ? allTractRecords : allBlockRecords}
-        {epsilonValue}
-        {level}
-        {scopeLabel}
-      />
-    {:else if activeTab === 'tiles'}
-      <CompositionTiles records={visibleRecords} {epsilonIndex} {level} {epsilonValue} />
-    {/if}
+        <ReadingNotesPanel {notes} />
+      </div>
+    </section>
   </main>
 {/if}
 
@@ -315,18 +283,12 @@
     color: var(--muted);
   }
 
-  .tabs,
   .segmented {
     display: inline-flex;
     flex-wrap: wrap;
     gap: 0.4rem;
   }
 
-  .tabs {
-    margin-bottom: 1rem;
-  }
-
-  .tabs button,
   .segmented button {
     border: 0;
     border-radius: var(--pill-radius);
@@ -339,7 +301,6 @@
       color 180ms ease;
   }
 
-  .tabs button.active,
   .segmented button.active {
     background: var(--accent);
     color: white;
@@ -348,7 +309,7 @@
 
   .controls {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, auto));
+    grid-template-columns: repeat(3, minmax(0, auto));
     gap: 1rem;
     align-items: end;
     padding: 1rem;
@@ -364,7 +325,7 @@
   }
 
   .control-label {
-    font-size: 0.8rem;
+    font-size: 0.72rem;
     font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
@@ -384,7 +345,7 @@
 
   .slider-copy strong {
     font-family: "Fraunces", serif;
-    font-size: 1.1rem;
+    font-size: 0.98rem;
     color: #111827;
   }
 
@@ -396,16 +357,20 @@
   .epsilon-labels {
     display: flex;
     justify-content: space-between;
-    font-size: 0.76rem;
+    font-size: 0.68rem;
     color: var(--muted);
   }
 
-  .toggle {
+  .mode-group {
+    min-width: 180px;
+  }
+
+  .mode-check {
     display: inline-flex;
     align-items: center;
-    gap: 0.55rem;
+    gap: 0.4rem;
     color: var(--muted);
-    padding-bottom: 0.75rem;
+    font-size: 0.82rem;
   }
 
   .helper {
