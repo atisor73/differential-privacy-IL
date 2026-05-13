@@ -1,0 +1,20 @@
+{
+  "name": "dp-illinois-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prep-data": "python3 scripts/build_demo_data.py"
+  },
+  "dependencies": {
+    "d3": "^7.9.0",
+    "svelte": "^5.55.5"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.4",
+    "vite": "^5.4.0"
+  }
+}
