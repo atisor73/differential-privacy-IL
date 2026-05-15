@@ -5,8 +5,22 @@ const isPagesBuild = process.env.GITHUB_ACTIONS === 'true';
 const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1] ?? 'differential-privacy';
 const configuredBase = process.env.VITE_BASE_PATH;
 
+function normalizeBasePath(value) {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+
+  const withoutEdges = trimmed.replace(/^\/+|\/+$/g, '');
+  return `/${withoutEdges}/`;
+}
+
 export default defineConfig({
-  base: configuredBase ?? (isPagesBuild ? `/${repoName}/` : '/'),
+  base: normalizeBasePath(configuredBase) ?? (isPagesBuild ? `/${repoName}/` : '/'),
   plugins: [
     svelte({
       compilerOptions: {
