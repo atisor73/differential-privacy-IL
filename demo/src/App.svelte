@@ -45,10 +45,15 @@
   let notes = [];
   let isLoadingHistogram = false;
   let selectedDataSourceLabel = 'Constrained';
+  const basePath = import.meta.env.BASE_URL;
 
   function toNumber(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function withBase(path) {
+    return `${basePath}${path.replace(/^\/+/, '')}`;
   }
 
   function parseReleaseCsv(text) {
@@ -74,7 +79,7 @@
       return releaseCache.get(cacheKey);
     }
 
-    const base = `/data/opendp_${sourceId}/epsilon_${label}`;
+    const base = withBase(`data/opendp_${sourceId}/epsilon_${label}`);
     const [countyRes, tractRes] = await Promise.all([
       fetch(`${base}/DF_IL_2010_COUNTY_DP.csv`),
       fetch(`${base}/DF_IL_2010_TRACT_DP.csv`)
@@ -124,7 +129,7 @@
       return histogramCache.get(sourceId);
     }
 
-    const response = await fetch(`/data/race_histograms_${sourceId}.json`);
+    const response = await fetch(withBase(`data/race_histograms_${sourceId}.json`));
     const bundle = await response.json();
     histogramCache.set(sourceId, bundle);
     return bundle;
@@ -154,9 +159,9 @@
 
   onMount(async () => {
     const [countiesRes, tractsRes, metricsRes] = await Promise.all([
-      fetch('/data/counties.geojson'),
-      fetch('/data/tracts.geojson'),
-      fetch('/data/metrics.json')
+      fetch(withBase('data/counties.geojson')),
+      fetch(withBase('data/tracts.geojson')),
+      fetch(withBase('data/metrics.json'))
     ]);
 
     countiesGeojson = await countiesRes.json();
