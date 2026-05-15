@@ -14,9 +14,9 @@
   --cool-soft: rgba(111, 120, 132, 0.18);
   --warm: #7d2230;
   --shadow: 0 10px 28px rgba(44, 35, 40, 0.12);
-  --panel-radius: 10px;
-  --tile-radius: 8px;
-  --pill-radius: 8px;
+  --panel-radius: 5px;
+  --tile-radius: 5px;
+  --pill-radius: 5px;
 }
 
 html,

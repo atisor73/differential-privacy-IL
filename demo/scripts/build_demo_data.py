@@ -5,13 +5,14 @@ import csv
 import json
 import math
 import random
+import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_DATA_DIR = ROOT / "demo" / "public" / "data"
 MAPSHAPER_DIR = ROOT / "data" / "tabblock2010_17_pophu" / "mapshaper"
-DEFAULT_DP_ROOT = ROOT / "data" / "processed_data" / "DP_noise"
+DEFAULT_DP_ROOT = ROOT / "data" / "processed_data" / "DP_noise_sparse"
 
 COUNTIES_TOPOJSON = MAPSHAPER_DIR / "counties.topojson"
 TRACTS_TOPOJSON = MAPSHAPER_DIR / "tracts.topojson"
@@ -57,6 +58,80 @@ def discover_epsilons(dp_root: Path):
     if not epsilons:
         raise ValueError(f"No epsilon_* directories found under {dp_root}")
     return sorted(epsilons, key=epsilon_sort_key)
+
+
+def copy_release_csvs(dp_root: Path, epsilons: list[str]):
+    public_root = PUBLIC_DATA_DIR / "opendp"
+    public_root.mkdir(parents=True, exist_ok=True)
+
+    for epsilon in epsilons:
+        source_dir = dp_root / f"epsilon_{epsilon}"
+        target_dir = public_root / f"epsilon_{epsilon}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for level in ("county", "tract"):
+            filename = f"DF_IL_2010_{level.upper()}_DP.csv"
+            shutil.copy2(source_dir / filename, target_dir / filename)
+
+
+def build_race_histogram_summary(dp_root: Path, epsilons: list[str], clip_pct: int = 200, bin_width: int = 5):
+    bins = list(range(-clip_pct, clip_pct, bin_width))
+    rows = []
+
+    for epsilon in epsilons:
+        epsilon_dir = dp_root / f"epsilon_{epsilon}"
+        for level in ("block", "tract", "county"):
+            path = epsilon_dir / f"DF_IL_2010_{level.upper()}_DP.csv"
+            histograms = {
+                race: [
+                    {"start": start, "end": start + bin_width, "unitCount": 0}
+                    for start in bins
+                ]
+                for race in RACE_COLS
+            }
+            totals = {race: 0 for race in RACE_COLS}
+
+            with path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    for race in RACE_COLS:
+                        true_value = int(row[race])
+                        if true_value <= 0:
+                            continue
+                        released_value = int(row[f"adj_{race}"])
+                        pct_change = ((released_value - true_value) / true_value) * 100
+                        clipped = max(-clip_pct, min(clip_pct, pct_change))
+                        index = min(len(bins) - 1, int((clipped + clip_pct) // bin_width))
+                        histograms[race][index]["unitCount"] += 1
+                        totals[race] += 1
+
+            for race in RACE_COLS:
+                total_units = totals[race] or 1
+                for entry in histograms[race]:
+                    rows.append(
+                        {
+                            "epsilon": epsilon,
+                            "level": level,
+                            "race": race,
+                            "start": entry["start"],
+                            "end": entry["end"],
+                            "unitCount": entry["unitCount"],
+                            "unitShare": entry["unitCount"] / total_units,
+                            "totalUnits": totals[race],
+                        }
+                    )
+
+    payload = {
+        "meta": {
+            "clipPct": clip_pct,
+            "binWidth": bin_width,
+            "epsilons": epsilons,
+            "levels": ["block", "tract", "county"],
+            "races": RACE_COLS,
+            "dpRoot": str(dp_root),
+        },
+        "rows": rows,
+    }
+    (PUBLIC_DATA_DIR / "race_histograms.json").write_text(json.dumps(payload, separators=(",", ":")))
 
 
 def round_nested(value, digits=ROUND_DIGITS):
@@ -470,6 +545,8 @@ def main():
     dp_root = args.dp_root.resolve()
     epsilons = discover_epsilons(dp_root)
     default_epsilon = args.default_epsilon if args.default_epsilon in epsilons else epsilons[min(2, len(epsilons) - 1)]
+    copy_release_csvs(dp_root, epsilons)
+    build_race_histogram_summary(dp_root, epsilons)
 
     county_bbox_lookup = build_geojson_outputs()
     counties = load_release_metrics("county", dp_root, epsilons)

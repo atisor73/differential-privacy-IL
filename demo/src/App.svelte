@@ -1,55 +1,129 @@
 <script>
+  import { csvParse } from 'd3';
   import { onMount } from 'svelte';
-  import DetailPanel from './lib/DetailPanel.svelte';
   import IllinoisMap from './lib/IllinoisMap.svelte';
   import ReadingNotesPanel from './lib/ReadingNotesPanel.svelte';
   import ScopeSummaryPanel from './lib/ScopeSummaryPanel.svelte';
-  import ScatterPlot from './lib/ScatterPlot.svelte';
-  import { LEVELS, summarize } from './lib/metrics.js';
-  import { aggregateBlockLevelReleases } from './lib/simulate.js';
+  import VisualTabsPanel from './lib/VisualTabsPanel.svelte';
+  import { CHANGE_MODES, LEVELS, summarize } from './lib/metrics.js';
 
   let countiesGeojson = null;
   let tractsGeojson = null;
   let metrics = null;
-  let blockTruthRecords = [];
   let epsilonOptions = ['0.1', '0.2', '0.5', '1', '2'];
 
   let level = 'county';
+  const selectedRace = 'all';
   let epsilonSlider = 0;
   let epsilonIndex = 0;
-  let epsilonValue = 0.5;
   let epsilonLabel = '0.5';
   let changeMode = 'absolute';
   let inspectedRecord = null;
   let countyRecords = [];
   let tractRecords = [];
-  let allTractRecords = [];
-  let simulatedCountyRecords = [];
-  let simulatedAllTractRecords = [];
+  let histogramData = null;
+  let hasLoadedRelease = false;
+  let isLoadingRelease = false;
   let visibleRecords = [];
   let summary = null;
   let scopeLabel = '';
-  const aggregateReleaseCache = new Map();
+  const selectedRaceLabel = 'Population';
+  const selectedRaceSubject = 'population';
+  const releaseCache = new Map();
+  let releaseLoadToken = 0;
+  let loadedEpsilonLabel = '';
+  const activeReleaseIndex = 0;
 
   const notes = [
-    'The map and scatterplot show released aggregates changing while the underlying population stays fixed.',
-    'The JavaScript demo adds independent Laplace-style noise to race counts at the block level, clips at zero, and aggregates upward.',
-    'Because the released totals come from many noised block-level race cells, tract and county counts can end up above or below the true values.',
-    'This is a lightweight visualization model, not the full Census production system.'
+    'The map reads county and tract population counts directly from the OpenDP CSV releases copied into the demo bundle.',
+    'Changing epsilon swaps to a different precomputed OpenDP county and tract release instead of resampling in the browser.',
+    'The map now stays on total population rather than switching between race-specific queries.',
+    'The right-hand panel compares block, tract, and county race percent-error histograms from the same sparse OpenDP release set.'
   ];
 
+  function toNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function parseReleaseCsv(text) {
+    return csvParse(text, (row) => ({
+      geoid: row.geoid,
+      parentGeoid: row.parent_geoid,
+      truePop: toNumber(row.true_pop),
+      white: toNumber(row.white),
+      black: toNumber(row.black),
+      asian: toNumber(row.asian),
+      other: toNumber(row.other),
+      adjPop: [toNumber(row.adj_pop)],
+      adjWhite: [toNumber(row.adj_white)],
+      adjBlack: [toNumber(row.adj_black)],
+      adjAsian: [toNumber(row.adj_asian)],
+      adjOther: [toNumber(row.adj_other)]
+    }));
+  }
+
+  async function fetchReleaseBundle(label) {
+    if (releaseCache.has(label)) {
+      return releaseCache.get(label);
+    }
+
+    const base = `/data/opendp/epsilon_${label}`;
+    const [countyRes, tractRes] = await Promise.all([
+      fetch(`${base}/DF_IL_2010_COUNTY_DP.csv`),
+      fetch(`${base}/DF_IL_2010_TRACT_DP.csv`)
+    ]);
+
+    const [countyText, tractText] = await Promise.all([countyRes.text(), tractRes.text()]);
+    const bundle = {
+      counties: parseReleaseCsv(countyText),
+      tracts: parseReleaseCsv(tractText)
+    };
+    releaseCache.set(label, bundle);
+    return bundle;
+  }
+
+  async function loadReleaseBundle(label) {
+    if (!label || label === loadedEpsilonLabel) {
+      return;
+    }
+
+    const token = ++releaseLoadToken;
+    isLoadingRelease = true;
+    try {
+      const bundle = await fetchReleaseBundle(label);
+      if (token !== releaseLoadToken) {
+        return;
+      }
+
+      countyRecords = bundle.counties;
+      tractRecords = bundle.tracts;
+      loadedEpsilonLabel = label;
+      hasLoadedRelease = true;
+
+      if (inspectedRecord?.geoid) {
+        const source = level === 'county' ? bundle.counties : bundle.tracts;
+        inspectedRecord = source.find((record) => record.geoid === inspectedRecord.geoid) ?? null;
+      }
+    } finally {
+      if (token === releaseLoadToken) {
+        isLoadingRelease = false;
+      }
+    }
+  }
+
   onMount(async () => {
-    const [countiesRes, tractsRes, metricsRes, blockTruthRes] = await Promise.all([
+    const [countiesRes, tractsRes, metricsRes, histogramsRes] = await Promise.all([
       fetch('/data/counties.geojson'),
       fetch('/data/tracts.geojson'),
       fetch('/data/metrics.json'),
-      fetch('/data/block_truth.json')
+      fetch('/data/race_histograms.json')
     ]);
 
     countiesGeojson = await countiesRes.json();
     tractsGeojson = await tractsRes.json();
     metrics = await metricsRes.json();
-    blockTruthRecords = await blockTruthRes.json();
+    histogramData = await histogramsRes.json();
 
     level = metrics.meta.defaultLevel;
     epsilonOptions = metrics.meta.epsilons ?? epsilonOptions;
@@ -58,35 +132,14 @@
     epsilonSlider = epsilonIndex;
   });
 
-  $: countyRecords = metrics?.counties ?? [];
-  $: tractRecords = metrics?.tracts ?? [];
   $: epsilonIndex = Math.max(0, Math.min(epsilonOptions.length - 1, Number(epsilonSlider) || 0));
-  $: epsilonValue = Number(epsilonOptions[epsilonIndex] ?? 0.5);
   $: epsilonLabel = String(epsilonOptions[epsilonIndex] ?? '0.5');
-
-  $: allTractRecords = tractRecords;
-  $: if (blockTruthRecords.length) {
-    const cacheKey = `${epsilonLabel}`;
-    if (!aggregateReleaseCache.has(cacheKey)) {
-      aggregateReleaseCache.set(
-        cacheKey,
-        aggregateBlockLevelReleases(blockTruthRecords, epsilonValue, ['bias', 'block-truth'])
-      );
-    }
-    const aggregated = aggregateReleaseCache.get(cacheKey);
-    simulatedCountyRecords = aggregated.counties;
-    simulatedAllTractRecords = aggregated.tracts;
-  } else {
-    simulatedCountyRecords = [];
-    simulatedAllTractRecords = [];
+  $: if (metrics && epsilonLabel) {
+    loadReleaseBundle(epsilonLabel);
   }
 
-  $: visibleRecords =
-    level === 'county'
-      ? simulatedCountyRecords
-      : simulatedAllTractRecords;
-
-  $: summary = summarize(visibleRecords, 0, changeMode);
+  $: visibleRecords = level === 'county' ? countyRecords : tractRecords;
+  $: summary = summarize(visibleRecords, activeReleaseIndex, changeMode, selectedRace);
   $: scopeLabel =
     level === 'county'
       ? 'Statewide county view'
@@ -94,7 +147,7 @@
 
   function handleSelectCounty(event) {
     if (level === 'county') {
-      inspectedRecord = simulatedCountyRecords.find((record) => record.geoid === event.detail) ?? null;
+      inspectedRecord = countyRecords.find((record) => record.geoid === event.detail) ?? null;
     }
   }
 
@@ -102,21 +155,14 @@
     inspectedRecord = event.detail ?? null;
   }
 
-  function helperText() {
-    if (level === 'county') {
-      return 'County values come from noising race counts at the Illinois block level in JavaScript and aggregating those signed block-level errors upward.';
-    }
-    return 'Tract values come from the same block-level JavaScript noise model aggregated upward from blocks, so they can move above or below truth.';
-  }
-
 </script>
 
-{#if !metrics || !countiesGeojson || !tractsGeojson}
+{#if !metrics || !countiesGeojson || !tractsGeojson || !histogramData || !hasLoadedRelease}
   <main class="loading-shell">
     <section class="hero">
       <p class="eyebrow">Preparing the view</p>
       <h1>Illinois differential privacy explorer</h1>
-      <p class="lede">Loading geography and released counts from the local demo bundle.</p>
+      <p class="lede">Loading geography and OpenDP county and tract CSV releases from the local demo bundle.</p>
     </section>
   </main>
 {:else}
@@ -126,8 +172,10 @@
         <p class="eyebrow">Rosita Fu & Alyssa Nguyen - DATA 35900 - Spring 2026</p>
         <h1>Visualizing differential privacy in Illinois at various ε</h1>
         <p class="lede">
-          This demo keeps the underlying population fixed and lets the published counts change with the privacy
-          level through a simple block-level noise model.
+          This demo aims to provide a visual modality for policy-makers to understand how parameters
+          of differential privacy algorithms affect the original population sample.
+          Data from Illinois 2010 census is noised with the open source framework OpenDP. Post-processing attempts
+          a simplified version of the TDA algorithm.
         </p>
       </div>
     </section>
@@ -154,7 +202,7 @@
       <div class="control-group slider-group">
         <div class="slider-copy">
           <span class="control-label">Privacy level</span>
-          <strong>ε = {epsilonLabel}</strong>
+          <strong>ε = {epsilonLabel}{#if isLoadingRelease} · updating{/if}</strong>
         </div>
         <input
           type="range"
@@ -170,65 +218,69 @@
         </div>
       </div>
 
-      <div class="control-group mode-group">
+      <div class="control-group">
         <span class="control-label">Metric</span>
-        <label class="mode-check">
-          <input
-            type="checkbox"
-            checked={changeMode === 'absolute'}
-            on:change={() => (changeMode = 'absolute')}
-          />
-          <span>Population change</span>
-        </label>
-        <label class="mode-check">
-          <input
-            type="checkbox"
-            checked={changeMode === 'percent'}
-            on:change={() => (changeMode = 'percent')}
-          />
-          <span>Percent change</span>
-        </label>
+        <div class="segmented">
+          {#each CHANGE_MODES as mode}
+            <button
+              type="button"
+              class:active={changeMode === mode.id}
+              on:click={() => {
+                changeMode = mode.id;
+              }}
+            >
+              {mode.label}
+            </button>
+          {/each}
+        </div>
       </div>
-    </section>
 
-    {#if helperText()}
-      <p class="helper">{helperText()}</p>
-    {/if}
+    </section>
 
     <section class="content">
       <div class="map-column">
         <IllinoisMap
           {countiesGeojson}
           {tractsGeojson}
-          countyRecords={simulatedCountyRecords}
-          tractRecords={simulatedAllTractRecords}
-          epsilonIndex={0}
+          {countyRecords}
+          {tractRecords}
+          epsilonIndex={activeReleaseIndex}
           {level}
           {changeMode}
+          {selectedRace}
+          highlightedGeoid={inspectedRecord?.geoid ?? null}
           on:selectCounty={handleSelectCounty}
           on:inspect={handleInspect}
-        />
-        <DetailPanel
-          selectedRecord={inspectedRecord}
-          epsilonIndex={0}
-          {changeMode}
-          {level}
         />
       </div>
 
       <div class="side-column">
-        <ScopeSummaryPanel {epsilonLabel} {changeMode} {scopeLabel} {summary} />
-
-        <ScatterPlot
-          records={visibleRecords}
-          epsilonIndex={0}
+        <ScopeSummaryPanel
+          {epsilonLabel}
           {changeMode}
+          {scopeLabel}
+          {summary}
+          {selectedRaceLabel}
+          {selectedRaceSubject}
           {level}
-          on:inspect={handleInspect}
         />
 
-        <ReadingNotesPanel {notes} />
+        <VisualTabsPanel
+          visibleRecords={visibleRecords}
+          epsilonIndex={activeReleaseIndex}
+          {epsilonLabel}
+          {changeMode}
+          {level}
+          highlightedGeoid={inspectedRecord?.geoid ?? null}
+          selectedRecord={inspectedRecord}
+          {selectedRace}
+          {histogramData}
+        />
       </div>
+    </section>
+
+    <section class="notes-row">
+      <ReadingNotesPanel {notes} />
     </section>
   </main>
 {/if}
@@ -237,7 +289,7 @@
   .shell,
   .loading-shell {
     padding: 2rem 1.25rem 3rem;
-    max-width: 1440px;
+    max-width: 1520px;
     margin: 0 auto;
   }
 
@@ -277,10 +329,6 @@
     max-width: 72ch;
     line-height: 1.6;
     font-size: 1rem;
-  }
-
-  .helper {
-    color: var(--muted);
   }
 
   .segmented {
@@ -361,36 +409,25 @@
     color: var(--muted);
   }
 
-  .mode-group {
-    min-width: 180px;
-  }
-
-  .mode-check {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    color: var(--muted);
-    font-size: 0.82rem;
-  }
-
-  .helper {
-    margin: 0.9rem 0 1rem;
-    padding-left: 0.2rem;
-    line-height: 1.5;
-  }
-
   .content {
     display: grid;
-    grid-template-columns: minmax(360px, 430px) minmax(0, 540px);
-    gap: 1rem;
+    grid-template-columns: minmax(330px, 0.62fr) minmax(700px, 1fr);
+    gap: 1.2rem;
+    margin-top: 1.2rem;
     align-items: start;
-    justify-content: start;
+    justify-content: stretch;
   }
 
   .map-column,
   .side-column {
     display: grid;
     gap: 1rem;
+    min-width: 0;
+  }
+
+  .notes-row {
+    margin-top: 1rem;
+    max-width: 1080px;
   }
 
   @media (max-width: 1100px) {

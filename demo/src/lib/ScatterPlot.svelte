@@ -1,18 +1,14 @@
 <script>
   import { createEventDispatcher } from 'svelte';
-  import {
-    extent,
-    line,
-    max,
-    scaleLinear,
-    schemeTableau10
-  } from 'd3';
-  import { populationChange, whiteShare } from './metrics.js';
+  import { line, scaleLinear } from 'd3';
+  import { countChange, raceLabel, raceShare } from './metrics.js';
 
   export let records = [];
   export let epsilonIndex = 0;
   export let changeMode = 'absolute';
-  export let level = 'county';
+  export let selectedRace = 'white';
+  export let embedded = false;
+  export let highlightedGeoid = null;
 
   const dispatch = createEventDispatcher();
   const width = 520;
@@ -25,12 +21,16 @@
   let yScale = scaleLinear();
   let bins = [];
   let trendLine = null;
+  let dotTone = '#7d2230';
+  let activeRaceLabel = 'White';
 
   $: plotted = records.map((record) => ({
     record,
-    x: whiteShare(record),
-    y: populationChange(record, epsilonIndex, changeMode)
+    x: raceShare(record, selectedRace),
+    y: countChange(record, epsilonIndex, selectedRace, changeMode)
   }));
+  $: dotTone = '#7d2230';
+  $: activeRaceLabel = raceLabel(selectedRace);
 
   $: xScale = scaleLinear().domain([0, 1]).range([margin.left, width - margin.right]);
 
@@ -73,22 +73,8 @@
       }));
   }
 
-  function dotColor(point) {
-    if (level === 'block') {
-      const vtdIndex = Number(point.record.demoVtd.split('-v')[1]) - 1;
-      return schemeTableau10[vtdIndex % schemeTableau10.length];
-    }
-    return 'rgba(125, 34, 48, 0.72)';
-  }
-
   function inspect(record) {
     dispatch('inspect', record);
-  }
-
-  function maybeInspect(record) {
-    if (level !== 'block') {
-      inspect(record);
-    }
   }
 
   function maybeInspectActivate(event, record) {
@@ -96,6 +82,10 @@
       event.preventDefault();
       inspect(record);
     }
+  }
+
+  function isHighlighted(record) {
+    return Boolean(record?.geoid) && record.geoid === highlightedGeoid;
   }
 
   function formatPercent(value) {
@@ -145,16 +135,16 @@
   }
 </script>
 
-<figure class="panel scatter-panel">
+<div class:panel={!embedded} class:scatter-panel={!embedded} class="visual-shell">
   <div class="panel-header">
     <div>
-      <h2>% white vs. released change</h2>
-      <p>The dark line bins points by white share so you can quickly scan for a U-shape.</p>
+      <h2>{activeRaceLabel} share vs. released change</h2>
+      <p>The line averages released {activeRaceLabel.toLowerCase()} change within bins of the true {activeRaceLabel.toLowerCase()} share.</p>
     </div>
     <span class="badge">{records.length.toLocaleString()} points</span>
   </div>
 
-  <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Scatterplot of white share and differential privacy change">
+  <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Scatterplot of ${activeRaceLabel.toLowerCase()} share and differential privacy change`}>
     <rect width={width} height={height} rx="14" class="paper" />
 
     {#each gridTicks() as tick}
@@ -189,13 +179,16 @@
       <circle
         cx={xScale(point.x)}
         cy={yScale(point.y)}
-        r={level === 'block' ? 2.6 : 3.1}
-        fill={dotColor(point)}
-        opacity={level === 'block' ? 0.5 : 0.72}
+        class="scatter-point"
+        r={isHighlighted(point.record) ? 4.2 : 3.1}
+        fill={dotTone}
+        opacity={0.72}
+        stroke={isHighlighted(point.record) ? '#ffffff' : 'none'}
+        stroke-width={isHighlighted(point.record) ? 1.8 : 0}
         role="button"
         tabindex="0"
         aria-label="Inspect scatter point"
-        on:mouseenter={() => maybeInspect(point.record)}
+        on:mouseenter={() => inspect(point.record)}
         on:click={() => inspect(point.record)}
         on:keydown={(event) => maybeInspectActivate(event, point.record)}
       />
@@ -205,7 +198,7 @@
       <path d={trendLine} class="trend-line" />
     {/if}
 
-    <text x={width / 2} y={height - 12} text-anchor="middle" class="title-label">True share white</text>
+    <text x={width / 2} y={height - 12} text-anchor="middle" class="title-label">True share {activeRaceLabel.toLowerCase()}</text>
     <text
       x={18}
       y={height / 2}
@@ -213,10 +206,10 @@
       class="title-label"
       transform={`rotate(-90 18 ${height / 2})`}
     >
-      {changeMode === 'percent' ? 'Released percent change' : 'Released population change'}
+      {changeMode === 'percent' ? `Released ${activeRaceLabel.toLowerCase()} percent change` : `Released ${activeRaceLabel.toLowerCase()} count change`}
     </text>
   </svg>
-</figure>
+</div>
 
 <style>
   .panel {
@@ -230,6 +223,11 @@
 
   .scatter-panel {
     width: min(100%, 540px);
+  }
+
+  .visual-shell {
+    display: grid;
+    gap: 0.65rem;
   }
 
   .panel-header {
@@ -269,13 +267,13 @@
   }
 
   .zero-line {
-    stroke: rgba(125, 34, 48, 0.55);
+    stroke: rgba(28, 25, 23, 0.36);
     stroke-width: 1.4;
   }
 
   .trend-line {
     fill: none;
-    stroke: #641824;
+    stroke: var(--ink);
     stroke-width: 2.4;
     stroke-linecap: round;
     stroke-linejoin: round;
@@ -293,5 +291,10 @@
     padding: 0.35rem 0.55rem;
     background: rgba(231, 234, 238, 0.94);
     border-radius: var(--pill-radius);
+  }
+
+  .scatter-point:focus,
+  .scatter-point:focus-visible {
+    outline: none;
   }
 </style>

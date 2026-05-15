@@ -6,8 +6,8 @@ This is a standalone Svelte + D3 + Vite demo added without modifying the existin
 
 - Illinois county and tract maps using the local GeoJSON files already in the repo
 - A sampled block-centroid layer for block-level exploration that stays responsive in the browser
-- A discrete epsilon slider wired to the existing DP release files in `data/processed_data/DP_noise`
-- A scatterplot of true `% white` against released population change
+- A discrete epsilon slider wired to the existing DP release files in `data/processed_data/DP_noise_sparse`
+- A race percent-change histogram panel for the currently selected geography level
 - A synthetic "demo VTD" overlay that partitions sampled blocks into simple spatial cells within each county
 
 ## Generate the demo bundle

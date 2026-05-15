@@ -297,6 +297,48 @@ def epsilon_outputs_exist(output_root: Path, epsilon: float) -> bool:
     return all(path.exists() for path in required_files)
 
 
+def summarize_saved_outputs(
+    output_root: Path,
+    epsilons: list[float],
+) -> pd.DataFrame:
+    file_names = {
+        "block": "DF_IL_2010_BLOCK_DP.csv",
+        "tract": "DF_IL_2010_TRACT_DP.csv",
+        "county": "DF_IL_2010_COUNTY_DP.csv",
+        "state": "DF_IL_2010_STATE_DP.csv",
+    }
+
+    rows: list[dict[str, float | int | str]] = []
+
+    for epsilon in epsilons:
+        if not epsilon_outputs_exist(output_root, epsilon):
+            continue
+
+        epsilon_dir = epsilon_output_dir(output_root, epsilon)
+        for level_name, file_name in file_names.items():
+            df = pd.read_csv(epsilon_dir / file_name)
+            stats = summarize_error(df).to_dict()
+            stats["epsilon"] = epsilon
+            stats["level"] = level_name
+            rows.append(stats)
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "n",
+                "mean_error",
+                "mean_abs_error",
+                "median_abs_error",
+                "max_abs_error",
+                "rmse",
+                "epsilon",
+                "level",
+            ]
+        )
+
+    return pd.DataFrame(rows).sort_values(["level", "epsilon"]).reset_index(drop=True)
+
+
 def run_epsilons(
     epsilons: list[float] = DEFAULT_EPSILONS,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
@@ -312,7 +354,6 @@ def run_epsilons(
         f"{len(block_df):,} blocks, {len(tract_df):,} tracts, {len(county_df):,} counties, {len(state_df):,} states",
     )
 
-    rows: list[dict[str, float | int | str]] = []
     all_results: dict[float, dict[str, pd.DataFrame]] = {}
 
     output_root.mkdir(parents=True, exist_ok=True)
@@ -338,15 +379,9 @@ def run_epsilons(
         all_results[epsilon] = results
         log(verbose, f"[epsilon={epsilon_label}] saved CSVs to {epsilon_dir}")
 
-        for level_name, df in results.items():
-            stats = summarize_error(df).to_dict()
-            stats["epsilon"] = epsilon
-            stats["level"] = level_name
-            rows.append(stats)
-
         log(verbose, f"Finished epsilon={epsilon_label} in {time.time() - epsilon_start:.1f}s")
 
-    summary_df = pd.DataFrame(rows).sort_values(["level", "epsilon"]).reset_index(drop=True)
+    summary_df = summarize_saved_outputs(output_root, epsilons)
     summary_df.to_csv(output_root / "DP_noise_error_summary.csv", index=False)
     log(verbose, f"Saved summary CSV to {output_root / 'DP_noise_error_summary.csv'}")
     log(verbose, f"Completed all epsilon runs in {time.time() - start:.1f}s")
