@@ -15,7 +15,7 @@
   let activeView = 'histograms';
 
   const views = [
-    { id: 'histograms', label: 'Percent Error by Race' },
+    { id: 'histograms', label: 'Percent Population Change by Race' },
     { id: 'bars', label: 'Composition' }
   ];
 </script>

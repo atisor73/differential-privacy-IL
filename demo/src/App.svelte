@@ -11,12 +11,18 @@
   let tractsGeojson = null;
   let metrics = null;
   let epsilonOptions = ['0.1', '0.2', '0.5', '1', '2'];
+  const fallbackDataSources = [
+    { id: 'constrained', label: 'Constrained' },
+    { id: 'sparse', label: 'Unconstrained' }
+  ];
 
   let level = 'county';
   const selectedRace = 'all';
   let epsilonSlider = 0;
   let epsilonIndex = 0;
   let epsilonLabel = '0.5';
+  let dataSourceOptions = fallbackDataSources;
+  let dataSource = 'constrained';
   let changeMode = 'absolute';
   let inspectedRecord = null;
   let countyRecords = [];
@@ -30,16 +36,15 @@
   const selectedRaceLabel = 'Population';
   const selectedRaceSubject = 'population';
   const releaseCache = new Map();
+  const histogramCache = new Map();
   let releaseLoadToken = 0;
-  let loadedEpsilonLabel = '';
+  let histogramLoadToken = 0;
+  let loadedReleaseKey = '';
+  let loadedHistogramSource = '';
   const activeReleaseIndex = 0;
-
-  const notes = [
-    'The map reads county and tract population counts directly from the OpenDP CSV releases copied into the demo bundle.',
-    'Changing epsilon swaps to a different precomputed OpenDP county and tract release instead of resampling in the browser.',
-    'The map now stays on total population rather than switching between race-specific queries.',
-    'The right-hand panel compares block, tract, and county race percent-error histograms from the same sparse OpenDP release set.'
-  ];
+  let notes = [];
+  let isLoadingHistogram = false;
+  let selectedDataSourceLabel = 'Constrained';
 
   function toNumber(value) {
     const parsed = Number(value);
@@ -63,12 +68,13 @@
     }));
   }
 
-  async function fetchReleaseBundle(label) {
-    if (releaseCache.has(label)) {
-      return releaseCache.get(label);
+  async function fetchReleaseBundle(sourceId, label) {
+    const cacheKey = `${sourceId}:${label}`;
+    if (releaseCache.has(cacheKey)) {
+      return releaseCache.get(cacheKey);
     }
 
-    const base = `/data/opendp/epsilon_${label}`;
+    const base = `/data/opendp_${sourceId}/epsilon_${label}`;
     const [countyRes, tractRes] = await Promise.all([
       fetch(`${base}/DF_IL_2010_COUNTY_DP.csv`),
       fetch(`${base}/DF_IL_2010_TRACT_DP.csv`)
@@ -79,26 +85,27 @@
       counties: parseReleaseCsv(countyText),
       tracts: parseReleaseCsv(tractText)
     };
-    releaseCache.set(label, bundle);
+    releaseCache.set(cacheKey, bundle);
     return bundle;
   }
 
-  async function loadReleaseBundle(label) {
-    if (!label || label === loadedEpsilonLabel) {
+  async function loadReleaseBundle(sourceId, label) {
+    const nextKey = `${sourceId}:${label}`;
+    if (!label || !sourceId || nextKey === loadedReleaseKey) {
       return;
     }
 
     const token = ++releaseLoadToken;
     isLoadingRelease = true;
     try {
-      const bundle = await fetchReleaseBundle(label);
+      const bundle = await fetchReleaseBundle(sourceId, label);
       if (token !== releaseLoadToken) {
         return;
       }
 
       countyRecords = bundle.counties;
       tractRecords = bundle.tracts;
-      loadedEpsilonLabel = label;
+      loadedReleaseKey = nextKey;
       hasLoadedRelease = true;
 
       if (inspectedRecord?.geoid) {
@@ -112,21 +119,54 @@
     }
   }
 
+  async function fetchHistogramBundle(sourceId) {
+    if (histogramCache.has(sourceId)) {
+      return histogramCache.get(sourceId);
+    }
+
+    const response = await fetch(`/data/race_histograms_${sourceId}.json`);
+    const bundle = await response.json();
+    histogramCache.set(sourceId, bundle);
+    return bundle;
+  }
+
+  async function loadHistogramBundle(sourceId) {
+    if (!sourceId || sourceId === loadedHistogramSource) {
+      return;
+    }
+
+    const token = ++histogramLoadToken;
+    isLoadingHistogram = true;
+    try {
+      const bundle = await fetchHistogramBundle(sourceId);
+      if (token !== histogramLoadToken) {
+        return;
+      }
+
+      histogramData = bundle;
+      loadedHistogramSource = sourceId;
+    } finally {
+      if (token === histogramLoadToken) {
+        isLoadingHistogram = false;
+      }
+    }
+  }
+
   onMount(async () => {
-    const [countiesRes, tractsRes, metricsRes, histogramsRes] = await Promise.all([
+    const [countiesRes, tractsRes, metricsRes] = await Promise.all([
       fetch('/data/counties.geojson'),
       fetch('/data/tracts.geojson'),
-      fetch('/data/metrics.json'),
-      fetch('/data/race_histograms.json')
+      fetch('/data/metrics.json')
     ]);
 
     countiesGeojson = await countiesRes.json();
     tractsGeojson = await tractsRes.json();
     metrics = await metricsRes.json();
-    histogramData = await histogramsRes.json();
 
     level = metrics.meta.defaultLevel;
     epsilonOptions = metrics.meta.epsilons ?? epsilonOptions;
+    dataSourceOptions = metrics.meta.dataSources ?? fallbackDataSources;
+    dataSource = metrics.meta.defaultDataSource ?? dataSourceOptions[0]?.id ?? 'constrained';
     const defaultEpsilon = String(metrics.meta.defaultEpsilon ?? '0.5');
     epsilonIndex = Math.max(0, epsilonOptions.findIndex((value) => String(value) === defaultEpsilon));
     epsilonSlider = epsilonIndex;
@@ -134,8 +174,16 @@
 
   $: epsilonIndex = Math.max(0, Math.min(epsilonOptions.length - 1, Number(epsilonSlider) || 0));
   $: epsilonLabel = String(epsilonOptions[epsilonIndex] ?? '0.5');
-  $: if (metrics && epsilonLabel) {
-    loadReleaseBundle(epsilonLabel);
+  $: selectedDataSourceLabel = dataSourceOptions.find((option) => option.id === dataSource)?.label ?? 'Constrained';
+  $: notes = [
+    `The map reads county and tract population counts directly from the ${selectedDataSourceLabel.toLowerCase()} OpenDP CSV releases copied into the demo bundle.`,
+    'Changing epsilon swaps to a different precomputed county and tract release instead of resampling in the browser.',
+    'The map now stays on total population rather than switching between race-specific queries.',
+    `The right-hand panel compares block, tract, and county race percent-change histograms from the same ${selectedDataSourceLabel.toLowerCase()} release set.`
+  ];
+  $: if (metrics && epsilonLabel && dataSource) {
+    loadReleaseBundle(dataSource, epsilonLabel);
+    loadHistogramBundle(dataSource);
   }
 
   $: visibleRecords = level === 'county' ? countyRecords : tractRecords;
@@ -199,10 +247,27 @@
         </div>
       </div>
 
+      <div class="control-group">
+        <span class="control-label">Release set</span>
+        <div class="segmented">
+          {#each dataSourceOptions as option}
+            <button
+              type="button"
+              class:active={dataSource === option.id}
+              on:click={() => {
+                dataSource = option.id;
+              }}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+
       <div class="control-group slider-group">
         <div class="slider-copy">
           <span class="control-label">Privacy level</span>
-          <strong>ε = {epsilonLabel}{#if isLoadingRelease} · updating{/if}</strong>
+          <strong>ε = {epsilonLabel}{#if isLoadingRelease || isLoadingHistogram} · updating{/if}</strong>
         </div>
         <input
           type="range"
@@ -357,7 +422,7 @@
 
   .controls {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, auto));
+    grid-template-columns: repeat(4, minmax(0, auto));
     gap: 1rem;
     align-items: end;
     padding: 1rem;

@@ -5,7 +5,7 @@
 <article class="panel">
   <div class="panel-header">
     <div>
-      <h2>Reading notes</h2>
+      <h2>Notes</h2>
       <p>These cues keep the visual metaphor closer to the way DP outputs actually behave.</p>
     </div>
   </div>

@@ -103,9 +103,15 @@
 
   $: ({ negativeDomain: countyNegativeDomain, positiveDomain: countyPositiveDomain, maxAbsDomain: countyDomain } = robustStats(countyRecords));
   $: ({ negativeDomain: tractNegativeDomain, positiveDomain: tractPositiveDomain, maxAbsDomain: tractDomain } = robustStats(tractRecords));
-  $: activeDomain = level === 'county' ? countyDomain : tractDomain;
-  $: activeNegativeDomain = level === 'county' ? countyNegativeDomain : tractNegativeDomain;
-  $: activePositiveDomain = level === 'county' ? countyPositiveDomain : tractPositiveDomain;
+  $: if (changeMode === 'percent') {
+    activeDomain = level === 'county' ? 0.4 : 1.0;
+    activeNegativeDomain = activeDomain;
+    activePositiveDomain = activeDomain;
+  } else {
+    activeDomain = level === 'county' ? countyDomain : tractDomain;
+    activeNegativeDomain = level === 'county' ? countyNegativeDomain : tractNegativeDomain;
+    activePositiveDomain = level === 'county' ? countyPositiveDomain : tractPositiveDomain;
+  }
 
   function formatLegendValue(value) {
     if (changeMode === 'percent') {

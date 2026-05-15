@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_DATA_DIR = ROOT / "demo" / "public" / "data"
 MAPSHAPER_DIR = ROOT / "data" / "tabblock2010_17_pophu" / "mapshaper"
 DEFAULT_DP_ROOT = ROOT / "data" / "processed_data" / "DP_noise_sparse"
+DEFAULT_CONSTRAINED_DP_ROOT = ROOT / "data" / "processed_data" / "DP_noise_sparse_constrained"
 
 COUNTIES_TOPOJSON = MAPSHAPER_DIR / "counties.topojson"
 TRACTS_TOPOJSON = MAPSHAPER_DIR / "tracts.topojson"
@@ -40,6 +41,12 @@ def parse_args():
         default="0.5",
         help="Default epsilon label to select in the demo if present.",
     )
+    parser.add_argument(
+        "--constrained-dp-root",
+        type=Path,
+        default=DEFAULT_CONSTRAINED_DP_ROOT,
+        help="Directory containing constrained epsilon_<value>/ release folders.",
+    )
     return parser.parse_args()
 
 
@@ -60,8 +67,8 @@ def discover_epsilons(dp_root: Path):
     return sorted(epsilons, key=epsilon_sort_key)
 
 
-def copy_release_csvs(dp_root: Path, epsilons: list[str]):
-    public_root = PUBLIC_DATA_DIR / "opendp"
+def copy_release_csvs(dp_root: Path, epsilons: list[str], source_id: str):
+    public_root = PUBLIC_DATA_DIR / f"opendp_{source_id}"
     public_root.mkdir(parents=True, exist_ok=True)
 
     for epsilon in epsilons:
@@ -73,7 +80,13 @@ def copy_release_csvs(dp_root: Path, epsilons: list[str]):
             shutil.copy2(source_dir / filename, target_dir / filename)
 
 
-def build_race_histogram_summary(dp_root: Path, epsilons: list[str], clip_pct: int = 200, bin_width: int = 5):
+def build_race_histogram_summary(
+    dp_root: Path,
+    epsilons: list[str],
+    source_id: str,
+    clip_pct: int = 200,
+    bin_width: int = 5,
+):
     bins = list(range(-clip_pct, clip_pct, bin_width))
     rows = []
 
@@ -131,7 +144,7 @@ def build_race_histogram_summary(dp_root: Path, epsilons: list[str], clip_pct: i
         },
         "rows": rows,
     }
-    (PUBLIC_DATA_DIR / "race_histograms.json").write_text(json.dumps(payload, separators=(",", ":")))
+    (PUBLIC_DATA_DIR / f"race_histograms_{source_id}.json").write_text(json.dumps(payload, separators=(",", ":")))
 
 
 def round_nested(value, digits=ROUND_DIGITS):
@@ -543,10 +556,30 @@ def main():
     args = parse_args()
     PUBLIC_DATA_DIR.mkdir(parents=True, exist_ok=True)
     dp_root = args.dp_root.resolve()
+    constrained_dp_root = args.constrained_dp_root.resolve()
     epsilons = discover_epsilons(dp_root)
     default_epsilon = args.default_epsilon if args.default_epsilon in epsilons else epsilons[min(2, len(epsilons) - 1)]
-    copy_release_csvs(dp_root, epsilons)
-    build_race_histogram_summary(dp_root, epsilons)
+    source_roots = []
+    if constrained_dp_root.exists():
+        source_roots.append(
+            {
+                "id": "constrained",
+                "label": "Constrained",
+                "dpRoot": constrained_dp_root,
+            }
+        )
+    source_roots.append(
+        {
+            "id": "sparse",
+            "label": "Unconstrained",
+            "dpRoot": dp_root,
+        }
+    )
+
+    for source in source_roots:
+        source_epsilons = discover_epsilons(source["dpRoot"])
+        copy_release_csvs(source["dpRoot"], source_epsilons, source["id"])
+        build_race_histogram_summary(source["dpRoot"], source_epsilons, source["id"])
 
     county_bbox_lookup = build_geojson_outputs()
     counties = load_release_metrics("county", dp_root, epsilons)
@@ -581,6 +614,15 @@ def main():
             "epsilons": epsilons,
             "defaultLevel": "county",
             "defaultEpsilon": default_epsilon,
+            "defaultDataSource": "constrained" if constrained_dp_root.exists() else "sparse",
+            "dataSources": [
+                {
+                    "id": source["id"],
+                    "label": source["label"],
+                    "dpRoot": str(source["dpRoot"]),
+                }
+                for source in source_roots
+            ],
             "defaultCountyGeoid": DEFAULT_FOCUS_COUNTY,
             "blockSampleNote": "Sampled blocks are rendered as real sampled block polygons.",
             "vtdNote": "Synthetic demo VTDs are 2x2 spatial partitions of sampled blocks within each county.",
