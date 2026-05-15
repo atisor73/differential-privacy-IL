@@ -18,8 +18,8 @@
   export let highlightedGeoid = null;
 
   const dispatch = createEventDispatcher();
-  const width = 360;
-  const height = 375;
+  const width = 380;
+  const height = 320;
   const projection = geoMercator();
   let path;
   let countyById = new Map();

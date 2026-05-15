@@ -111,25 +111,31 @@ export function summarize(records, epsilonIndex, mode, raceId) {
     return {
       count: 0,
       meanChange: 0,
-      meanAbsoluteChange: 0,
+      standardDeviationChange: 0,
       meanShare: 0
     };
   }
 
+  const changes = [];
   let sum = 0;
-  let absSum = 0;
   let shareSum = 0;
   for (const record of records) {
     const change = countChange(record, epsilonIndex, raceId, mode);
+    changes.push(change);
     sum += change;
-    absSum += Math.abs(change);
     shareSum += raceShare(record, raceId);
+  }
+
+  const meanChange = sum / records.length;
+  let squaredDeviationSum = 0;
+  for (const change of changes) {
+    squaredDeviationSum += (change - meanChange) ** 2;
   }
 
   return {
     count: records.length,
-    meanChange: sum / records.length,
-    meanAbsoluteChange: absSum / records.length,
+    meanChange,
+    standardDeviationChange: Math.sqrt(squaredDeviationSum / records.length),
     meanShare: shareSum / records.length
   };
 }

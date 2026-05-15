@@ -36,11 +36,11 @@
       </div>
     {/if}
     <div class="summary-stat">
-      <span class="eyebrow">Mean |{selectedRaceSubject} change|</span>
+      <span class="eyebrow">Std. dev. {selectedRaceSubject} change</span>
       <strong>
         {changeMode === 'percent'
-          ? formatMaybePercent(summary.meanAbsoluteChange)
-          : formatPopulation(summary.meanAbsoluteChange)}
+          ? formatMaybePercent(summary.standardDeviationChange)
+          : formatPopulation(summary.standardDeviationChange)}
       </strong>
     </div>
   {/if}

@@ -72,18 +72,20 @@
   }
 
   .toggle-row button {
-    border: 0;
+    border: 1px solid rgba(44, 35, 40, 0.14);
     border-radius: var(--pill-radius);
     padding: 0.55rem 0.8rem;
     background: rgba(233, 236, 240, 0.88);
     color: var(--ink);
     transition:
       transform 180ms ease,
+      border-color 180ms ease,
       background 180ms ease,
       color 180ms ease;
   }
 
   .toggle-row button.active {
+    border-color: rgba(125, 34, 48, 0.9);
     background: var(--accent);
     color: white;
     transform: translateY(-1px);

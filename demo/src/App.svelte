@@ -176,10 +176,14 @@
   $: epsilonLabel = String(epsilonOptions[epsilonIndex] ?? '0.5');
   $: selectedDataSourceLabel = dataSourceOptions.find((option) => option.id === dataSource)?.label ?? 'Constrained';
   $: notes = [
-    `The map reads county and tract population counts directly from the ${selectedDataSourceLabel.toLowerCase()} OpenDP CSV releases copied into the demo bundle.`,
-    'Changing epsilon swaps to a different precomputed county and tract release instead of resampling in the browser.',
-    'The map now stays on total population rather than switching between race-specific queries.',
-    `The right-hand panel compares block, tract, and county race percent-change histograms from the same ${selectedDataSourceLabel.toLowerCase()} release set.`
+    `At low epsilon, the current optimization at the block-level introduces positive and negative percent change in population.
+    However, when aggregating at the county-level, many tracts and counties end up with more minorities over-represented with only positive percent change.
+    At such low epsilon the noise is high and thus we observe this clipping effect. Otherwise this points to something strange happening with the optimization.`,
+    'At very high epsilon, the noise is so little as to be completely ineffective.',
+    `In the algorithm we implemented, epsilon completely controls the racial composition and skew given the discrete non-negative
+    constraints of what we are trying to do. Selecting a high epsilon seems effectively meaningless when it comes to privacy considerations.`,
+    `In the 2020 census, the noising was not universally applied to all block groups, but targeted specific queries. Tools like this can help
+    minority groups better understand how noising affects their representation.`
   ];
   $: if (metrics && epsilonLabel && dataSource) {
     loadReleaseBundle(dataSource, epsilonLabel);
@@ -220,10 +224,12 @@
         <p class="eyebrow">Rosita Fu & Alyssa Nguyen - DATA 35900 - Spring 2026</p>
         <h1>Visualizing differential privacy in Illinois at various ε</h1>
         <p class="lede">
-          This demo aims to provide a visual modality for policy-makers to understand how parameters
-          of differential privacy algorithms affect the original population sample.
-          Data from Illinois 2010 census is noised with the open source framework OpenDP. Post-processing attempts
-          a simplified version of the TDA algorithm.
+          This demo aims to provide a visual modality for policy-makers to understand how the epsilon parameter
+          of differential privacy algorithms affects the original population sample, in particular the racail composition
+          at a tract and county-level.
+          Data from Illinois 2010 census is noised with the open source framework OpenDP and post-processed with
+          constraints of the original population at each hierarchy. This is an attempt at simulating a simplified version of the 
+          TDA algorithm.
         </p>
       </div>
     </section>
@@ -391,7 +397,8 @@
   .lede {
     margin: 0.9rem 0 0;
     color: var(--muted);
-    max-width: 72ch;
+    width: 100ch;
+    max-width: 100ch;
     line-height: 1.6;
     font-size: 1rem;
   }
@@ -403,18 +410,20 @@
   }
 
   .segmented button {
-    border: 0;
+    border: 1px solid rgba(44, 35, 40, 0.14);
     border-radius: var(--pill-radius);
     padding: 0.7rem 0.95rem;
     background: rgba(233, 236, 240, 0.88);
     color: var(--ink);
     transition:
       transform 180ms ease,
+      border-color 180ms ease,
       background 180ms ease,
       color 180ms ease;
   }
 
   .segmented button.active {
+    border-color: rgba(125, 34, 48, 0.9);
     background: var(--accent);
     color: white;
     transform: translateY(-1px);

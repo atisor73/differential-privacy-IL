@@ -14,7 +14,7 @@
   const width = 654;
   const height = 316;
   const panelWidth = 218;
-  const margin = { top: 28, right: 18, bottom: 40, left: 58 };
+  const margin = { top: 28, right: 18, bottom: 40, left: 45 };
   const plotRaces = RACES.filter((race) => race.id !== 'all');
 
   let levelRows = [];
